@@ -7,7 +7,7 @@ description = "A modern, developer-focused CLI for cryptographic file signing an
 license = "MIT"
 homepage = "https://github.com/opensecurity/sigmate"
 repository = "https://github.com/opensecurity/sigmate"
-keywords = ["signing", "verification", "cli", "sbom", "cryptography", "trust"]
+keywords = ["signing", "verification", "sbom", "cryptography", "trust"]
 
 [dependencies]
 anyhow = "1.0.98"
