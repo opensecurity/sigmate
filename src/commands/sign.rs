@@ -1,12 +1,14 @@
 use crate::app_config::{ConfigManager, SIGNATURES_FOLDER};
 use crate::cli::SignArgs;
 use crate::error::AppError;
+use crate::services::orphan_service::{scan_orphans, prune_orphans, OrphanReport};
 use crate::services::signing_service::{ChecksumTask, SigningService};
 use crate::ui::logger::{print_json, Logger};
 use crate::utils::{files, git};
 use chrono::{Duration, Utc};
 use serde_json::json;
 use std::fs;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -32,7 +34,7 @@ pub fn execute(args: SignArgs, logger: &Logger) -> Result<ExitCode, AppError> {
     if args.gen_sha256sums {
         checksum_tasks.push(ChecksumTask { algo: "sha256", output_filename: "SHA256SUMS".into() });
     }
-     if args.gen_sha512sums {
+    if args.gen_sha512sums {
         checksum_tasks.push(ChecksumTask { algo: "sha512", output_filename: "SHA512SUMS".into() });
     }
 
@@ -56,6 +58,48 @@ pub fn execute(args: SignArgs, logger: &Logger) -> Result<ExitCode, AppError> {
 
     let output_dir = args.signatures_output.clone().unwrap_or_else(|| base_dir.join(SIGNATURES_FOLDER));
     fs::create_dir_all(&output_dir).map_err(|e| AppError::Io { path: output_dir.clone(), source: e })?;
+
+    let mut orphan_report = OrphanReport::default();
+    let mut orphans_pruned = false;
+    if args.report_orphans || args.prune_orphans {
+        orphan_report = scan_orphans(&output_dir, &base_dir)?;
+        let has_orphans = !orphan_report.orphan_sig_files.is_empty()
+            || !orphan_report.orphan_meta_entries.is_empty()
+            || !orphan_report.orphan_sbom_components.is_empty();
+        if has_orphans && !args.json {
+            logger.warn("orphan artifacts detected:", Some("🧹"));
+            for p in &orphan_report.orphan_sig_files {
+                logger.warn(&format!("  - stale signature file: {}", p.display()), None);
+            }
+            for p in &orphan_report.orphan_meta_entries {
+                logger.warn(&format!("  - stale metadata entry: {}", p.display()), None);
+            }
+            for p in &orphan_report.orphan_sbom_components {
+                logger.warn(&format!("  - stale sbom component: {}", p.display()), None);
+            }
+        }
+        if has_orphans && args.prune_orphans {
+            let proceed = if args.yes {
+                true
+            } else {
+                print!("remove the listed orphan artifacts? (y/N) ");
+                io::stdout().flush().ok();
+                let mut input = String::new();
+                io::stdin().read_line(&mut input).ok();
+                input.trim().eq_ignore_ascii_case("y")
+            };
+            if proceed {
+                prune_orphans(&output_dir, &base_dir, &orphan_report)?;
+                orphans_pruned = true;
+                if !args.json {
+                    logger.success("orphan artifacts removed.", Some("✅"));
+                }
+                orphan_report = scan_orphans(&output_dir, &base_dir)?;
+            } else if !args.json {
+                logger.info("pruning aborted by user.", Some("🛑"));
+            }
+        }
+    }
 
     let git_author_identity = git::get_git_author(&base_dir).ok().flatten();
     let effective_identity = args
@@ -87,7 +131,11 @@ pub fn execute(args: SignArgs, logger: &Logger) -> Result<ExitCode, AppError> {
         force: args.force,
     };
     
-    let result_summary = service.execute()?;
+    let mut result_summary = service.execute()?;
+    result_summary.orphan_sig_files = orphan_report.orphan_sig_files.clone();
+    result_summary.orphan_meta_entries = orphan_report.orphan_meta_entries.clone();
+    result_summary.orphan_sbom_components = orphan_report.orphan_sbom_components.clone();
+    result_summary.orphans_pruned = orphans_pruned;
 
     if args.json {
         print_json(&json!(result_summary));
@@ -101,11 +149,25 @@ pub fn execute(args: SignArgs, logger: &Logger) -> Result<ExitCode, AppError> {
         for task in &result_summary.checksum_files_generated {
             logger.info(&format!("Successfully wrote checksum file to {}", task.display()), Some("🧮"));
         }
-        
         if result_summary.files_skipped_count > 0 {
-             logger.info(&format!("Skipped {} files (already signed and valid).", result_summary.files_skipped_count), Some("👍"));
+            logger.info(&format!("Skipped {} files (already signed and valid).", result_summary.files_skipped_count), Some("👍"));
         }
-        
+        if !result_summary.orphan_sig_files.is_empty()
+            || !result_summary.orphan_meta_entries.is_empty()
+            || !result_summary.orphan_sbom_components.is_empty()
+        {
+            logger.warn("orphan artifacts remain after signing:", Some("🧹"));
+            for p in &result_summary.orphan_sig_files {
+                logger.warn(&format!("  - signature file: {}", p.display()), None);
+            }
+            for p in &result_summary.orphan_meta_entries {
+                logger.warn(&format!("  - metadata entry: {}", p.display()), None);
+            }
+            for p in &result_summary.orphan_sbom_components {
+                logger.warn(&format!("  - sbom component: {}", p.display()), None);
+            }
+            logger.info("use '--prune-orphans' to remove them automatically.", Some("💡"));
+        }
         logger.info(&format!("Processed {} new files.", result_summary.files_processed_count), Some("✍️ "));
         logger.success("All operations completed successfully.", Some("🎉"));
     }

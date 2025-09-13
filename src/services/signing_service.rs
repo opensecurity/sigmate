@@ -28,6 +28,10 @@ pub struct SigningSummary {
     pub meta_file_path: Option<PathBuf>,
     pub sbom_file_path: Option<PathBuf>,
     pub checksum_files_generated: Vec<PathBuf>,
+    pub orphan_sig_files: Vec<PathBuf>,
+    pub orphan_meta_entries: Vec<PathBuf>,
+    pub orphan_sbom_components: Vec<PathBuf>,
+    pub orphans_pruned: bool,
 }
 
 pub struct ChecksumTask<'a> {
@@ -84,7 +88,7 @@ impl<'a> SigningService<'a> {
         for file_path in self.files_to_process {
             if !self.force {
                 match self.is_already_signed_and_valid(file_path, verifying_key.as_ref(), &existing_meta) {
-                    Ok(true) => { /* Skip this file */ },
+                    Ok(true) => {},
                     Ok(false) => files_to_sign.push(file_path),
                     Err(AppError::ExistingSignatureInvalid(path)) => {
                         idempotency_errors.push(path.display().to_string());
@@ -130,6 +134,10 @@ impl<'a> SigningService<'a> {
                 .into_iter()
                 .map(|p| files::remove_dot_slash_prefix(&p))
                 .collect(),
+            orphan_sig_files: Vec::new(),
+            orphan_meta_entries: Vec::new(),
+            orphan_sbom_components: Vec::new(),
+            orphans_pruned: false,
         };
 
         Ok(summary)
@@ -188,7 +196,6 @@ impl<'a> SigningService<'a> {
             let signature_file_path_for_meta = if self.should_write_raw {
                 let sig_output_path = files::build_output_path(file_path, self.base_dir, ".sig", self.output_dir)?;
                 fs::write(&sig_output_path, signature.to_bytes()).map_err(|e| AppError::Io { path: sig_output_path.clone(), source: e })?;
-
                 if self.no_abspath {
                     Some(files::remove_dot_slash_prefix(&sig_output_path))
                 } else {

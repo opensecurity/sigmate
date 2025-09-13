@@ -97,6 +97,15 @@ pub struct SignArgs {
 
     #[arg(long, help = "Overwrite existing signature and checksum artifacts.")]
     pub force: bool,
+
+    #[arg(long, help = "Detect and report orphan signature artifacts and stale metadata.")]
+    pub report_orphans: bool,
+
+    #[arg(long, help = "Remove orphan signature artifacts and stale metadata after confirmation.")]
+    pub prune_orphans: bool,
+
+    #[arg(long, short = 'y', help = "Auto-confirm pruning actions without prompting.")]
+    pub yes: bool,
 }
 
 #[derive(Parser, Debug)]
