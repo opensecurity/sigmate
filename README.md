@@ -48,7 +48,7 @@ cargo build --release
 
 Install from cargo
 ```bash
-cargo install devcat
+cargo install sigmate
 ```
 
 ## Quick start
